@@ -2,6 +2,22 @@
 
 A Gymnasium environment for Portal 2, registered as `samuelhautamaki/Portal2-v0`.
 
+## AI Notice.
+
+As a developer, I am a huge hater of "vibecoding" personally. I hold the personal belief that, (after the creation of JavaScript), agentic coding tools (such as Claude Code etc) have been the worst thing to happen to software development.
+
+However, I must admit that this project was written heavily with the help of vibecoding. In order to get this environment done in a reasonable amount of time, as a developer who does not at all write Python regularly at all, and someone who does not have the time to learn how SAR works with the game, it only made sense for me to enlist the help of Claude to write this environment.
+
+(I did not use Claude Code btw, just the (free tier btw) claude.ai web interface, worked fine for this.)
+
+This is just a Gymnasium environment, **I would never contribute AI written code to any project that is not my own**.
+
+## Unironically the most important acknowledgement.
+
+I absolutely admire and acknowledge the developers of the Portal 2 plugin [SourceAutoRecord](https://github.com/p2sr/SourceAutoRecord) and the Portal 2 Speedrunning Community. This Gymnasium environment would not have been possible without the existance of SAR.
+
+## Environment overview:
+
 The project has two halves that talk to each other over a small IPC
 protocol (see `docs/protocol.md`):
 
