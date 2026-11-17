@@ -143,3 +143,10 @@ via `options={"map": ...}` to `reset()`) to start each episode.
   and `cpp/src/SharedFrameBuffer.hpp`. The Windows launch path in
   `python/portal2_gym/launcher.py` needs a `portal2_exe` path since
   there's no equivalent of the Linux Steam runtime wrapper script.
+
+## Demonstration datasets
+
+See [dataset preparation](docs/datasets.md) for the single-game map-folder
+pipeline, native state capture, resume checks and observation/action semantics.
+[Capacity measurements](docs/dataset-preparation-capacity.md) summarize the
+full-duration inventory and pilot benchmark. Keep generated data outside this repo.

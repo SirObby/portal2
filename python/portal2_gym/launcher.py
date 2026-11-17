@@ -84,6 +84,8 @@ class GameLauncher:
             "+cl_drawhud", "0",
             "+crosshair", "0",
             "+closecaption", "0",
+            "+viewmodel_offset_x", "5000",
+            "+hidehud", "7",
         ]
         if self.has_sar:
             # Tells our own plugin (via the same command-line port-style

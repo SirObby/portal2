@@ -1,0 +1,2 @@
+# Unified diff context contains significant leading whitespace.
+docs/sar-render-timing/*.patch -whitespace

@@ -32,6 +32,7 @@
 #include "Engine.hpp"
 #include "RLBridge.hpp"
 #include "RLInput.hpp"
+#include "DemoCapture.hpp"
 #include "Modules/Console.hpp"
 #include "Offsets.hpp"
 
@@ -155,6 +156,11 @@ public:
         }
 
         g_port = ParsePortFromCommandLine();
+        if (DemoCapture::Requested()) {
+            g_loaded = DemoCapture::Start();
+            if (!g_loaded) DemoCapture::Shutdown();
+            return g_loaded;
+        }
         if (!RLBridge::Start(g_port)) {
             console->Warning("Portal2RL: failed to start control socket on port %d\n", g_port);
             return false;
@@ -172,7 +178,8 @@ public:
     }
 
     void Unload() override {
-        RLBridge::Shutdown();
+        if (DemoCapture::Requested()) DemoCapture::Shutdown();
+        else RLBridge::Shutdown();
         g_loaded = false;
     }
 
@@ -184,14 +191,17 @@ public:
     }
 
     void LevelInit(char const *pMapName) override {
+        if (DemoCapture::Requested()) return;
         RLBridge::OnLevelInit(pMapName);
     }
 
     void ServerActivate(void * /*pEdictList*/, int /*edictCount*/, int /*clientMax*/) override {
+        if (DemoCapture::Requested()) return;
         RLBridge::OnServerActivate();
     }
 
     void GameFrame(bool simulating) override {
+        if (DemoCapture::Requested()) return;
         if (!g_engine_initialized) return;
 
         if (g_has_sar && simulating) {
@@ -216,6 +226,7 @@ public:
     void ClientFullyConnect(void * /*pEdict*/) override {}
 
     void ClientActive(void *pEntity) override {
+        if (DemoCapture::Requested()) return;
         // This fires once the local player is fully in the server --
         // UTIL_PlayerByIndex(1) is valid from here onward, making this
         // the right place to install the PlayerRunCommand hook (earlier

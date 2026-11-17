@@ -144,3 +144,13 @@ crash on `Load()`, the most likely culprits are an offset that's drifted
 for your exact build, or a calling-convention mismatch on
 `PlayerRunCommand` (try logging inside `PlayerRunCommand_Detour` first
 to confirm it's even being called before debugging further).
+
+## Read-only demo dataset capture
+
+The plugin now also supports a separate client-demo capture mode, activated by
+`PORTAL2_RL_DEMO_CAPTURE=/absolute/output/capture.jsonl.partial` in the game's
+environment. It bypasses the live RL socket and action/lockstep path. Load it
+before SAR; it observes replayed client entities and recorded command decoding.
+Use the [folder preparation command](../docs/datasets.md) to coordinate
+this mode, provenance, rendering, clean journal shutdown and export validation.
+Normal Gym launches without this variable retain the live bridge behavior.

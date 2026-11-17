@@ -1,0 +1,6 @@
+# Generated datasets and runtime artifacts belong outside source control.
+/datasets/
+/artifacts/
+**/__pycache__/
+**/.pytest_cache/
+*.py[cod]

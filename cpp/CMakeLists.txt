@@ -63,6 +63,7 @@ add_library(portal2_rl_plugin SHARED
     src/RLState.cpp
     src/RLInput.cpp
     src/RLBridge.cpp
+    src/DemoCapture.cpp
 )
 
 target_include_directories(portal2_rl_plugin PRIVATE src)

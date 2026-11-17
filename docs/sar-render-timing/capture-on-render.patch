@@ -1,0 +1,19 @@
+--- a/src/Modules/Engine.cpp
++++ b/src/Modules/Engine.cpp
+@@ -413,7 +413,6 @@
+ 
+ 	engine->lastTick = session->GetTick();
+ 
+-	Renderer::Frame();
+ 	engine->demoplayer->HandlePlaybackFix();
+ 	Event::Trigger<Event::FRAME>({});
+ 
+@@ -789,6 +788,8 @@
+ 		// Just do a normal render
+ 		_Host_RunFrame_Render_Hook.Disable();
+ 		_Host_RunFrame_Render();
++		// Capture once per rendered host frame, not once per outer engine loop.
++		Renderer::Frame();
+ 		_Host_RunFrame_Render_Hook.Enable();
+ 	}
+ }
