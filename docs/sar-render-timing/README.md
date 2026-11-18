@@ -51,3 +51,39 @@ also fixes MP4 final-packet/edit-list visibility without changing decoded images
 See [dataset preparation](../datasets.md) for the complete pipeline and scientific
 admission limits. Historical console logs, comparison renders and pilot outputs
 are local artifacts and are intentionally excluded from this source repository.
+
+
+## Gun-free observations
+
+The config hides the portal gun with `r_drawviewmodel 0` and
+`viewmodel_offset_x 5000`, immediately and in both demo-start and config-reload
+callbacks. The reload callback previously restored offset zero, so its final
+one-time hiding command was insufficient. The corrected config was verified in
+a fresh 50-demo Triple Laser render, with early/middle/late sample frames checked
+across all 49 unique demonstrations. Held world objects remain visible.
+The live Gym launcher already requests offset 5000; local evaluation also sets
+`r_drawviewmodel 0`. Keep dataset rendering and policy observations consistent.
+
+## Challenge Mode HUD and research submission policy
+
+The render config uses `sar_disable_challenge_stats_hud -1` and
+`sar_portalgun_hud 0`, including demo-start/config-reload callbacks. The former
+hides the built-in CM stats; the latter disables SAR's separate portalgun HUD.
+`cl_drawhud 0` alone does not hide the built-in bottom-right CM panel.
+
+Research configs keep `sv_cheats 1` across those callbacks. At the pinned SAR
+revision, `AutoSubmit::FinishRun` returns immediately for a cheated run; development
+builds also return unconditionally. There is no autosubmit-off cvar at this
+revision. The native bridge additionally sets SAR's exported
+`AutoSubmit::g_cheated` guard when SAR is loaded. Live evaluation requires
+confirmation of that guard before accepting actions with SAR enabled. No API-key
+files are renamed, read by the evaluator, or removed.
+
+The default live path remains SAR-free. Its opt-in Challenge Mode path directly
+hides `CHUDChallengeStats` and blocks the leaderboard-open callback, matching the
+rendered appearance without loading SAR. A leaderboard popup can pause simulation;
+verify that neutral unfocused calibration keeps advancing, and do not count
+paused client frames as simulated steps. The SAR-enabled direct-input path remains unvalidated; use the validated
+SAR-free path for policy runs. The renderer pins the verified development SAR
+binary and confirms `sv_cheats=1` before playback. Its one-demo pilot completed
+and confirmed the native cheated-run guard during capture.

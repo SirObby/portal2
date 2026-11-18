@@ -1,27 +1,5 @@
-// RLInput.hpp: applies an Action via console commands ("+forward",
-// "-jump", etc.) issued through IVEngineServer::ClientCommand, exactly
-// matching real keyboard/console input semantics. See RLInput.cpp for
-// the full history of why direct CUserCmd manipulation (both a
-// server-side PlayerRunCommand hook and a client-side SteamControllerMove
-// hook) didn't reliably work, and why console commands were chosen
-// instead -- this path goes through the exact same dispatch real input
-// takes, so the engine's internal key-bind/edge-detection state is
-// always consistent with what we send, with no risk of being overwritten
-// by some other stage in the pipeline we haven't found.
-//
-// Button semantics (matching real console/bind behavior):
-//   - "+attack"/"+attack2"/"+duck" are HELD: sent as a "+"/"-" pair only
-//     on state transitions, exactly like holding/releasing a real key.
-//   - "+jump"/"+use" are PULSES: firing the action once, immediately.
-//     SetAction() always follows a "+jump"/"+use" with the matching
-//     "-jump"/"-use" at the start of the *next* call, regardless of what
-//     that next action requests -- this guarantees the press never
-//     carries across a tick boundary (which could otherwise cause an
-//     unwanted second jump, e.g. immediately on landing or on unpause).
-//     A consequence: to jump on two consecutive ACTION messages, the
-//     agent doesn't need to do anything special -- each jump=true tick
-//     produces its own clean +jump/-jump pulse since the release always
-//     happens before the next press is considered.
+// Legacy console delivery and optional queued CUserCmd delivery. See
+// RLInput.cpp and InputProbe.cpp for timing and held-button semantics.
 
 #pragma once
 
@@ -49,13 +27,13 @@ struct Action {
 void SetAction(const Action &action);
 
 // Resolves IVEngineClient (for SetViewAngles/GetViewAngles). Idempotent
-// -- safe to call every tick, only resolves once per process. The
-// `player` parameter is accepted for call-site compatibility with
-// earlier hook-based designs but is unused.
+// -- safe to call every tick, only resolves once per process. The player
+// parameter also installs the optional queued CUserCmd hooks.
 void InstallHookIfNeeded(void *player);
 
 // Releases all held buttons and clears pending pulse-release state, so a
 // fresh map doesn't inherit stale held input.
 void ResetAction();
+bool IsPaused();
 
 }  // namespace RLInput

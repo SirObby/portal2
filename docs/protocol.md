@@ -97,6 +97,13 @@ distinct shm segment name with no collision:
 
 The frame buffer size in bytes is `width * height * channels`.
 
+The native handshake also reports `input_backend` (`console`, `server`, or
+`client`), `challenge_requested` (whether opt-in Challenge Mode is requested),
+and `sar_submission_blocked` (whether the loaded SAR cheated-run guard was
+confirmed). A false SAR guard is expected when SAR is absent. The default input
+backend is `console`; `PORTAL2_RL_DIRECT_INPUT=1` selects server usercmd delivery,
+and `PORTAL2_RL_DIRECT_INPUT=client` selects client CreateMove delivery.
+
 ### `TICK` (Plugin → Python)
 
 Sent once per engine tick, after the frame has been written to shared
@@ -123,6 +130,18 @@ the engine to proceed.
 ```
 
 Field notes:
+
+- Top-level diagnostic fields, also present in `RESET_ACK`: `engine_tick`
+  (native tick counter), `input_consumed` (last consumed action request ID,
+  initially -1), `input_pending` (queued/in-flight actions), `simulating`,
+  and `paused`. Direct input is queued; a returned observation does not prove
+  that its corresponding action has already been consumed.
+- Top-level Challenge Mode fields: `challenge_enabled` (native cvar value),
+  `challenge_nodes` (discovered finish-node count), `challenge_finished`
+  (local player's native finish-node touch), `challenge_hud_hidden`, and
+  `challenge_seconds` (native challenge timer). They are distinct from the
+  request tick counter and `state.map_finished`. Opt in with
+  `PORTAL2_RL_CHALLENGE_MODE=1` in the game process environment.
 
 - `pos`, `vel`: player origin / velocity, Source units (inches), `[x, y, z]`.
 - `ang`: player eye angles (pitch, yaw, roll) in degrees.
@@ -265,7 +284,10 @@ closes the socket. Python is then expected to terminate the game process.
 - `terminated`: derived in Python from `state.map_finished` (the agent
   reached the level's `point_changelevel` / exit elevator -- success).
   Portal 2 SP has no health/death mechanic, so this is the only
-  plugin-reported termination signal; stuck/soft-lock detection (e.g. no
+  default plugin-reported termination signal. When the handshake confirms
+  `challenge_requested`, native `challenge_finished` also terminates the episode.
+  Python `info` distinguishes `map_transition_finished` and `challenge_finished`.
+  Stuck/soft-lock detection (e.g. no
   position change for N steps) is left to Python-side wrappers.
 - `truncated`: time-limit handled by Python (`max_episode_steps`), standard
   Gymnasium `TimeLimit`-style behavior -- the plugin has no concept of this.
@@ -278,3 +300,12 @@ closes the socket. Python is then expected to terminate the game process.
 This is protocol version `1`. Both `HELLO`/`HELLO_ACK` may later gain a
 `"version"` field for compatibility checks; for v0.1 it is omitted and
 assumed to match.
+
+### Optional Python demo recording
+
+`Portal2Env(record_demo=True, ...)` uses the owned game's separate loopback
+netconsole (`-netconport`, default control port + 1) for Source `record`/`stop`.
+This does not add protocol messages or require a C++ rebuild. Five neutral
+`ACTION`/`TICK` exchanges after the episode execute and finalize queued `stop`;
+these are outside the policy trajectory. See `python/README.md` for lifecycle
+and artifact validation details.

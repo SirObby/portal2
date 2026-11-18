@@ -33,6 +33,9 @@
 #include "RLBridge.hpp"
 #include "RLInput.hpp"
 #include "DemoCapture.hpp"
+#include "NoFocusSleep.hpp"
+#include "InputProbe.hpp"
+#include "ChallengeMode.hpp"
 #include "Modules/Console.hpp"
 #include "Offsets.hpp"
 
@@ -46,6 +49,7 @@ uint16_t g_port = 27182;
 bool g_engine_initialized = false;
 bool g_loaded = false;
 bool g_has_sar = false;
+bool g_sar_requested = false;
 
 // Returns the process's full command line as a single space-separated
 // string (NULs replaced with spaces on Linux, where /proc/self/cmdline
@@ -111,6 +115,15 @@ bool ParseHasSarFromCommandLine() {
     return std::atoi(pos) != 0;
 }
 
+// Enabled for live RL by default. This is a launch option, not a runtime cvar.
+bool NoFocusSleepRequested() {
+    const char *pos = std::strstr(GetCommandLine_(), "portal2_rl_no_focus_sleep");
+    if (!pos) return true;
+    pos += std::strlen("portal2_rl_no_focus_sleep");
+    while (*pos == ' ') ++pos;
+    return std::atoi(pos) != 0;
+}
+
 }  // namespace
 
 class Portal2RLPlugin : public IServerPluginCallbacks {
@@ -167,6 +180,17 @@ public:
         }
 
         g_has_sar = ParseHasSarFromCommandLine();
+        g_sar_requested = g_has_sar;
+        if (!RLChallenge::Init()) {
+            console->Warning("Portal2RL: Challenge Mode initialization failed\n");
+            RLChallenge::Shutdown();
+            RLBridge::Shutdown();
+            return false;
+        }
+        // SAR supplies the same hook when explicitly requested. Avoid stacking
+        // two InputSystem hooks with an unload-order dependency. Capture mode
+        // returned earlier and leaves SAR's rendering/capture path untouched.
+        if (!g_has_sar && NoFocusSleepRequested()) NoFocusSleep::Init();
         if (g_has_sar) {
             console->Print("Portal2RL: has_sar requested -- will issue "
                              "'plugin_load sar' once a level is ready\n");
@@ -178,6 +202,9 @@ public:
     }
 
     void Unload() override {
+        RLChallenge::Shutdown();
+        InputProbe::Shutdown();
+        NoFocusSleep::Shutdown();
         if (DemoCapture::Requested()) DemoCapture::Shutdown();
         else RLBridge::Shutdown();
         g_loaded = false;
@@ -192,17 +219,20 @@ public:
 
     void LevelInit(char const *pMapName) override {
         if (DemoCapture::Requested()) return;
+        RLChallenge::LevelInit();
         RLBridge::OnLevelInit(pMapName);
     }
 
     void ServerActivate(void * /*pEdictList*/, int /*edictCount*/, int /*clientMax*/) override {
         if (DemoCapture::Requested()) return;
+        RLChallenge::InstallNodeHooks();
         RLBridge::OnServerActivate();
     }
 
     void GameFrame(bool simulating) override {
-        if (DemoCapture::Requested()) return;
+        if (DemoCapture::Requested()) { RLChallenge::BlockSarSubmission(); return; }
         if (!g_engine_initialized) return;
+        if (simulating) RLChallenge::InstallNodeHooks();
 
         if (g_has_sar && simulating) {
             // Fire once, on the first simulating tick we see -- by this
@@ -213,15 +243,19 @@ public:
             // same target edict) that QueueConsoleCommand("map ...")
             // already proven to work correctly with.
             g_has_sar = false;
-            RLEngine::QueueConsoleCommand("plugin_load sar\nsar_disable_no_focus_sleep 1\n");
+            RLEngine::QueueConsoleCommand("plugin_load sar\nsv_cheats 1\nsar_disable_challenge_stats_hud -1\nsar_portalgun_hud 0\nsar_cheat_hud 0\nsar_disable_no_focus_sleep 1\n");
             console->Print("Portal2RL: issued 'plugin_load sar' + "
                              "'sar_disable_no_focus_sleep 1'\n");
         }
 
+        // Do not hand control to an experiment until submission is blocked.
+        if (g_sar_requested && !RLChallenge::BlockSarSubmission()) return;
+        if (RLChallenge::Requested() && InputProbe::Ready() && !RLChallenge::HideHud()) return;
+
         RLBridge::OnGameFrame(simulating);
     }
 
-    void LevelShutdown() override {}
+    void LevelShutdown() override { if (!DemoCapture::Requested()) { RLChallenge::Detach(); InputProbe::Detach(); } }
 
     void ClientFullyConnect(void * /*pEdict*/) override {}
 

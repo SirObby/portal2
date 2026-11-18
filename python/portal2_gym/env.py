@@ -44,7 +44,7 @@ class Portal2Env(gym.Env):
 
     Observation space: a ``Dict`` with
       - ``"screen"``: ``Box(0, 255, (H, W, 3), uint8)`` -- RGB frame.
-      - ``"state"``: ``Box(-inf, inf, (16,), float32)`` -- flattened game
+      - ``"state"``: ``Box(-inf, inf, (18,), float32)`` -- flattened game
         state vector (see :meth:`_state_to_vector`).
 
     Action space: ``Box(ACTION_LOW, ACTION_HIGH, (9,), float32)``. The
@@ -65,12 +65,17 @@ class Portal2Env(gym.Env):
         Extra keyword arguments forwarded to :class:`GameLauncher`
         (e.g. ``steam_root``, ``portal2_dir``, ``portal2_exe``,
         ``has_sar=True`` to also load SourceAutoRecord alongside our
-        plugin -- currently used for its ``sar_disable_no_focus_sleep``
-        fix, since unfocused Source windows are throttled and
-        ``engine_no_focus_sleep`` is not a real Portal 2 cvar).
+        plugin). SAR is optional; the native plugin handles unfocused
+        input throttling by default without it.
     connect_timeout:
         Seconds to wait for the plugin's control socket to come up after
         launching the game process.
+    record_demo, demo_dir, demo_port:
+        Automatically record one native Source .dem per episode. Defaults to
+        disabled; directory defaults to ./demos, netconsole port to port + 1.
+        Native termination/reset/close finalize it; call finish_demo() after
+        external truncation. Finalization advances five neutral post-episode
+        frames and returns verified demo metadata, also in last_demo.
     """
 
     metadata = {"render_modes": ["rgb_array"], "render_fps": 66}
@@ -85,6 +90,9 @@ class Portal2Env(gym.Env):
         launcher_kwargs: dict[str, Any] | None = None,
         connect_timeout: float = 120.0,
         _skip_launch: bool = False,
+        record_demo: bool = False,
+        demo_dir: str | None = None,
+        demo_port: int | None = None,
     ):
         super().__init__()
 
@@ -95,6 +103,23 @@ class Portal2Env(gym.Env):
         self.render_mode = render_mode
         self.connect_timeout = connect_timeout
         self._skip_launch = _skip_launch
+        self.record_demo = record_demo
+        self.last_demo = None
+        self._episode_done = True
+        launcher_kwargs = dict(launcher_kwargs or {})
+        self._demo_recorder = None
+        if record_demo:
+            from portal2_gym.demo import DemoRecorder
+            extra = list(launcher_kwargs.get('extra_args') or [])
+            if '-netconport' in extra:
+                existing = int(extra[extra.index('-netconport') + 1])
+                if demo_port is not None and demo_port != existing:
+                    raise ValueError('demo_port differs from launcher netconsole port')
+                demo_port = existing
+            else:
+                demo_port = demo_port if demo_port is not None else port + 1
+                extra += ['-netconport', str(demo_port)]
+            launcher_kwargs['extra_args'] = extra
 
         self._launcher = GameLauncher(
             width=width,
@@ -103,6 +128,15 @@ class Portal2Env(gym.Env):
             default_map=map_name,
             **(launcher_kwargs or {}),
         )
+        if record_demo:
+            if not _skip_launch:
+                import socket
+                try:
+                    with socket.create_connection(('127.0.0.1', demo_port), timeout=.2):
+                        raise RuntimeError('Demo netconsole port is occupied; refusing to attach to another game')
+                except ConnectionRefusedError:
+                    pass
+            self._demo_recorder = DemoRecorder(demo_dir or 'demos', self._launcher.portal2_dir, demo_port)
 
         self.observation_space = spaces.Dict(
             {
@@ -140,6 +174,7 @@ class Portal2Env(gym.Env):
         )
         self._conn.send({"type": "HELLO", "width": self.width, "height": self.height})
         ack = self._conn.recv_type("HELLO_ACK")
+        self.challenge_requested = bool(ack.get('challenge_requested', False))
 
         shm_name = ack["shm_name"]
         width = int(ack["width"])
@@ -231,6 +266,8 @@ class Portal2Env(gym.Env):
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         super().reset(seed=seed)
 
+        self.finish_demo()
+
         self._ensure_connected()
         assert self._conn is not None
 
@@ -242,6 +279,10 @@ class Portal2Env(gym.Env):
         obs, state = self._read_observation(ack)
 
         info = {"tick": self._tick, "raw_state": state}
+        self._episode_done = False
+        self.last_demo = None
+        if self._demo_recorder is not None:
+            info['demo_pending'] = self._demo_recorder.start(map_name)
         return obs, info
 
     def step(
@@ -249,6 +290,8 @@ class Portal2Env(gym.Env):
     ) -> tuple[dict[str, Any], float, bool, bool, dict[str, Any]]:
         if not self._connected:
             raise RuntimeError("Environment must be reset before calling step()")
+        if self.record_demo and self._episode_done:
+            raise RuntimeError('Episode ended; reset before stepping again')
         assert self._conn is not None
 
         action = np.asarray(action, dtype=np.float32)
@@ -274,13 +317,38 @@ class Portal2Env(gym.Env):
         # returns 0.0 and exposes raw state for reward-shaping wrappers.
         # Portal 2 SP has no health/death mechanic, so map_finished
         # (reaching the level's point_changelevel / exit elevator) is the
-        # only built-in termination signal.
+        # built-in termination signal outside opt-in Challenge Mode.
         reward = 0.0
-        terminated = bool(state.get("map_finished", False))
+        terminated = bool(state.get("map_finished", False)) or bool(
+            getattr(self, 'challenge_requested', False) and msg.get('challenge_finished', False)
+        )
         truncated = False
 
-        info = {"tick": self._tick, "raw_state": state}
+        info = {"tick": self._tick, "raw_state": state,
+                "map_transition_finished": bool(state.get('map_finished', False)),
+                "challenge_finished": bool(msg.get('challenge_finished', False))}
+        if terminated:
+            info.update(self.finish_demo() or {})
         return obs, reward, terminated, truncated, info
+
+    def finish_demo(self):
+        """Finalize the current demo, also for external time-limit truncation.
+
+        Advances five neutral post-episode frames to execute Source's queued
+        ``stop``. They are excluded from policy observations and step counts.
+        Called automatically on native termination, reset, and close. Call
+        explicitly after a wrapper truncates an episode to obtain metadata.
+        """
+        if self._demo_recorder is None or self._demo_recorder.source is None:
+            return self.last_demo
+        def flush():
+            self._conn.send(dict(type='ACTION', move_forward=0, move_side=0,
+                                 pitch_delta=0, yaw_delta=0, jump=False, duck=False,
+                                 use=False, fire_portal1=False, fire_portal2=False))
+            self._conn.recv_type('TICK', timeout=10)
+        self.last_demo = self._demo_recorder.finish(flush)
+        self._episode_done = True
+        return self.last_demo
 
     def render(self):
         if self.render_mode == "rgb_array":
@@ -288,6 +356,14 @@ class Portal2Env(gym.Env):
         return None
 
     def close(self) -> None:
+        try:
+            self.finish_demo()
+        finally:
+            self._close_resources()
+
+    def _close_resources(self) -> None:
+        if self._demo_recorder is not None:
+            self._demo_recorder.close()
         if self._conn is not None:
             try:
                 self._conn.send({"type": "CLOSE"})

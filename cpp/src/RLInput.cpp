@@ -1,60 +1,13 @@
-// RLInput.cpp: applies an Action via IVEngineServer::ClientCommand,
-// issuing "+key"/"-key" style console commands exactly as a human typing
-// into the console (or a real bound key) would -- e.g. "+forward",
-// "-forward", "+jump", "-jump". This replaced two earlier approaches
-// that didn't work correctly:
-//
-//   1. Hooking CPortal_Player::PlayerRunCommand (server-side) and
-//      writing cmd->buttons/viewangles directly -- buttons and angles
-//      were silently overwritten by the client input pipeline after our
-//      hook ran (movement axes apparently survived, buttons/angles did
-//      not).
-//   2. Hooking CInput::SteamControllerMove (client-side) and writing
-//      cmd->buttons/viewangles there instead -- confirmed via logging
-//      that our writes DID land in the CUserCmd correctly (buttons_after
-//      showed IN_JUMP set exactly when expected), and view angle control
-//      via IVEngineClient::SetViewAngles worked correctly, and
-//      forward/side movement worked correctly -- but jump still never
-//      triggered. The likely explanation: Source's jump-button edge
-//      detection (and bind-state tracking in general) lives in the
-//      *console command / key-bind* subsystem (in_jump.state, polled by
-//      CInput::CreateMove via the normal key-bind path), which our
-//      direct CUserCmd write bypasses entirely -- the cmd we wrote
-//      reached the server, but some other internal state the movement
-//      code also consults (or a later overwrite specifically for
-//      button-derived fields we didn't find) never agreed with it.
-//
-// Console commands avoid all of this by going through the exact same
-// path real input takes: "+jump" calls the engine's registered "+jump"
-// ConCommand, which sets the same internal key-bind state a physical
-// keypress would, which CInput::CreateMove then reads when building the
-// CUserCmd -- guaranteed consistent with whatever the rest of the engine
-// expects, since it's indistinguishable from real input at every layer
-// downstream of the command dispatch.
-//
-// Button semantics (matching real Source console/bind behavior exactly,
-// per user-confirmed observation):
-//   - "+attack"/"+attack2" (portal gun) are HELD: they fire continuously
-//     until the matching "-attack"/"-attack2" is sent. We track held
-//     state across ticks and only emit a transition when the desired
-//     state changes, like a human holding/releasing a mouse button.
-//   - "+jump"/"+use" fire their effect once, immediately, when run --
-//     holding "+jump" across tick boundaries risks an unwanted second
-//     jump later (e.g. immediately on landing, or on unpause), so we
-//     always immediately follow a "+jump"/"+use" with "-jump"/"-use" on
-//     the very next tick, regardless of what the agent's action requests
-//     for that next tick. This means a single ACTION message with
-//     jump=true reliably produces exactly one jump, and the agent must
-//     send jump=false for at least one tick before sending jump=true
-//     again to trigger a second jump (matching real key-press semantics:
-//     you can't "jump again" without releasing the key first).
-//   - Movement axes (forward/side) and view angles continue to use
-//     direct, immediate mechanisms (ClientCommand for movement,
-//     IVEngineClient::SetViewAngles for angles) since those worked
-//     correctly with the previous approach and don't have edge-detection
-//     semantics to worry about.
+// Action delivery supports a legacy console backend and opt-in CUserCmd
+// backends (PORTAL2_RL_DIRECT_INPUT=1 for server, =client for CreateMove).
+// Console jump/use pulses can be missed before client command creation.
+// The direct backends preserve held bits and analog movement magnitudes;
+// InputProbe queues each requested action for one generated/consumed command.
+// GameFrame observations can precede consumption; protocol metadata exposes
+// the last consumed request and actions still in flight.
 
 #include "RLInput.hpp"
+#include "InputProbe.hpp"
 #include "Engine.hpp"
 #include "Interface.hpp"
 #include "Offsets.hpp"
@@ -80,6 +33,8 @@ _SetViewAngles g_SetViewAngles = nullptr;
 _GetViewAngles g_GetViewAngles = nullptr;
 
 bool g_initialized = false;
+bool g_desiredValid=false;
+QAngle g_desired{};
 
 // Tracks held-button state across ticks so we only emit "+x"/"-x" on
 // actual transitions for held-style buttons (attack/attack2), and so we
@@ -175,21 +130,31 @@ void SetAction(const Action &action) {
     }
 
     // --- View angles ---
-    if ((action.pitch_delta != 0.0f || action.yaw_delta != 0.0f) &&
+    if ((InputProbe::ClientMode() || action.pitch_delta != 0.0f || action.yaw_delta != 0.0f) &&
         g_SetViewAngles && g_GetViewAngles && g_engineClient) {
         QAngle ang;
         g_GetViewAngles(g_engineClient->ThisPtr(), ang);
+        if (InputProbe::ClientMode()) {
+            if (!g_desiredValid) {g_desired=ang;g_desiredValid=true;}
+            ang=g_desired;
+        }
         ang.x += action.pitch_delta;
         ang.y += action.yaw_delta;
         if (ang.x > 89.0f) ang.x = 89.0f;
         if (ang.x < -89.0f) ang.x = -89.0f;
         while (ang.y > 180.0f) ang.y -= 360.0f;
         while (ang.y < -180.0f) ang.y += 360.0f;
+        if (InputProbe::ClientMode()) g_desired=ang;
         g_SetViewAngles(g_engineClient->ThisPtr(), ang);
     }
+    QAngle target{};
+    if (g_GetViewAngles) g_GetViewAngles(g_engineClient->ThisPtr(),target);
+    InputProbe::Request(action,target);
 }
 
 void ResetAction() {
+    InputProbe::Reset();
+    g_desiredValid=false;
     // Release everything so a fresh map doesn't inherit stale held
     // input. Mirrors a human releasing every key before a level change.
     RLEngine::QueueConsoleCommand(
@@ -198,7 +163,14 @@ void ResetAction() {
     g_buttons = ButtonState{};
 }
 
-void InstallHookIfNeeded(void * /*player*/) {
+bool IsPaused() {
+    if (!g_engineClient) return false;
+    auto paused=g_engineClient->Original<bool(__rescall *)(void *)>(Offsets::IsPaused);
+    return paused(g_engineClient->ThisPtr());
+}
+
+void InstallHookIfNeeded(void *player) {
+    InputProbe::Install(player);
     if (g_initialized) return;
 
     if (!g_engineClient) {

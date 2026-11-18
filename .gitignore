@@ -1,6 +1,9 @@
 # Generated datasets and runtime artifacts belong outside source control.
 /datasets/
 /artifacts/
+**/demos/
+*.dem
+*.dem.json
 **/__pycache__/
 **/.pytest_cache/
 *.py[cod]

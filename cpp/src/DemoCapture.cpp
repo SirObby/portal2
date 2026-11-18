@@ -1,5 +1,6 @@
 // Read-only demo client capture. Never connects to Python or applies input.
 #include "DemoCapture.hpp"
+#include "ChallengeMode.hpp"
 #include "Entity.hpp"
 #include "Interface.hpp"
 #include "Offsets.hpp"
@@ -66,6 +67,9 @@ json snapshot(int slot) {
             {"portals_valid",portalsValid},{"slot",slot}};
 }
 int __rescall decode(void *self, int slot, int buffer, int sequence) {
+    // Demo playback has no server GameFrame callback; enforce the same
+    // no-submission guard here without changing the recorded controls.
+    RLChallenge::BlockSarSubmission();
     // This is a snapshot before decoding this recorded input, not a claim that
     // every interpolated client entity is the original server's pre-tick state.
     json before = snapshot(slot);

@@ -138,6 +138,9 @@ via `options={"map": ...}` to `reset()`) to start each episode.
   suggesting otherwise, SourceAutoRecord's own install instructions (and
   years of community use) confirm unsigned plugins load fine in Portal 2
   SP via `plugin_load`/`+plugin_load` without it.
+- **Unfocused live RL needs no SAR.** The native plugin forwards InputSystem's
+  sleep call with zero wait by default. See `cpp/README.md` for the opt-out and
+  validation status.
 - **Linux-first, Windows-compatible.** All IPC (TCP sockets, shared
   memory) uses cross-platform primitives; see `cpp/src/ControlSocket.hpp`
   and `cpp/src/SharedFrameBuffer.hpp`. The Windows launch path in
@@ -150,3 +153,8 @@ See [dataset preparation](docs/datasets.md) for the single-game map-folder
 pipeline, native state capture, resume checks and observation/action semantics.
 [Capacity measurements](docs/dataset-preparation-capacity.md) summarize the
 full-duration inventory and pilot benchmark. Keep generated data outside this repo.
+
+Python Gym now supports `Portal2Env(record_demo=True, demo_dir="artifacts/demos")`
+for automatic native Source recordings, without SAR. See
+[the Python recording lifecycle documentation](python/README.md#automatic-source-demos)
+for finalization, time-limit handling, netconsole configuration and metadata.

@@ -61,9 +61,12 @@ add_library(portal2_rl_plugin SHARED
     src/Plugin.cpp
     src/Engine.cpp
     src/RLState.cpp
+    src/InputProbe.cpp
+    src/ChallengeMode.cpp
     src/RLInput.cpp
     src/RLBridge.cpp
     src/DemoCapture.cpp
+    src/NoFocusSleep.cpp
 )
 
 target_include_directories(portal2_rl_plugin PRIVATE src)

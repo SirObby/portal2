@@ -4,6 +4,8 @@
 #include "SharedFrameBuffer.hpp"
 #include "RLState.hpp"
 #include "RLInput.hpp"
+#include "InputProbe.hpp"
+#include "ChallengeMode.hpp"
 #include "Engine.hpp"
 #include "Entity.hpp"
 #include "Modules/Console.hpp"
@@ -30,6 +32,7 @@ bool g_handshake_done = false;
 constexpr uint32_t kChannels = 3;  // IMAGE_FORMAT_RGB888
 
 int g_tick = 0;
+bool g_simulating = false;
 
 // Tracks the map we last explicitly requested via RESET; used in
 // OnLevelInit to distinguish a Python-requested reset from an
@@ -141,12 +144,16 @@ bool DoHandshake() {
         return false;
     }
 
+    if (!InputProbe::Ready()) {console->Warning("Portal2RL: requested usercmd backend is not ready\n");return false;}
     json ack;
     ack["type"] = "HELLO_ACK";
     ack["shm_name"] = g_frame_buf.ExportName();
     ack["width"] = g_width;
     ack["height"] = g_height;
     ack["channels"] = kChannels;
+    ack["input_backend"] = InputProbe::BackendName();
+    ack["challenge_requested"] = RLChallenge::Requested();
+    ack["sar_submission_blocked"] = RLChallenge::BlockSarSubmission();
     ack["tick_interval"] = (RLEngine::gpGlobals ? RLEngine::gpGlobals->interval_per_tick : 0.0166667f);
 
     if (!g_socket.SendLine(ack.dump())) return false;
@@ -173,6 +180,16 @@ std::optional<ClientMessage> SendStateAndWait(const char *msg_type,
     json j;
     j["type"] = msg_type;
     j["tick"] = state.tick;
+    j["engine_tick"] = RLEngine::gpGlobals->tickcount;
+    j["input_consumed"] = InputProbe::LastConsumed();
+    j["input_pending"] = InputProbe::InFlight();
+    j["challenge_enabled"] = RLChallenge::Enabled();
+    j["challenge_nodes"] = RLChallenge::Nodes();
+    j["challenge_finished"] = RLChallenge::Finished();
+    j["challenge_hud_hidden"] = RLChallenge::HudHidden();
+    j["challenge_seconds"] = RLChallenge::Timer();
+    j["simulating"] = g_simulating;
+    j["paused"] = RLInput::IsPaused();
     j["frame_ready"] = frame_ready;
     j["state"] = StateToJson(state);
 
@@ -217,7 +234,9 @@ void OnLevelInit(const char *map_name) {
     }
 
     g_current_map = new_map;
-    g_tick = 0;
+    // Preserve the completed episode's elapsed ticks across an autonomous
+    // transition; Python still needs its terminal observation before RESET.
+    if (!g_map_finished_pending) g_tick = 0;
     g_in_loading = true;
 }
 
@@ -241,7 +260,11 @@ void OnServerActivate() {
 }
 
 void OnGameFrame(bool simulating) {
-    if (!simulating) return;
+    g_simulating = simulating;
+    // A step must advance simulation. CM leaderboard popups used to pause
+    // this exchange; hide/block those panels rather than counting paused
+    // client frames as simulation steps.
+    if (!simulating && !(g_handshake_done && RLChallenge::Finished())) return;
 
     if (!g_handshake_done) {
         if (!DoHandshake()) return;
@@ -282,7 +305,10 @@ void OnGameFrame(bool simulating) {
 
             // If Python asked for a different map than what's loaded,
             // issue the load and wait for the next cycle.
-            if (requested_map != g_current_map) {
+            // The command-line +map can initialize before plugin loading.
+            // Reload once with the Challenge Mode settings hook installed,
+            // rather than reporting an enabled cvar without a finish node.
+            if (requested_map != g_current_map || (RLChallenge::Requested() && RLChallenge::Nodes()==0)) {
                 IssueResetCommand(requested_map);
                 return;
             }

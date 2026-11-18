@@ -154,3 +154,54 @@ before SAR; it observes replayed client entities and recorded command decoding.
 Use the [folder preparation command](../docs/datasets.md) to coordinate
 this mode, provenance, rendering, clean journal shutdown and export validation.
 Normal Gym launches without this variable retain the live bridge behavior.
+
+## Unfocused live RL without SAR
+
+Live RL mode now installs the same `CInputSystem::SleepUntilInput` hook used by
+SAR's `sar_disable_no_focus_sleep`: it forwards to the original input function
+with a maximum sleep of zero. Input processing still runs. The existing vendored
+`Offsets::SleepUntilInput` slot (33 on both supported platforms) is used; no
+`engine_no_focus_sleep` cvar is assumed.
+
+This is enabled by default when SAR is not explicitly requested. Disable it for
+an A/B benchmark by passing `+portal2_rl_no_focus_sleep 0` in launcher extra args.
+It is skipped in demo-capture mode, and when `+portal2_rl_has_sar 1` requests SAR's
+own fix. Missing interfaces/hooks warn and leave the environment usable. Unload
+restores the original InputSystem vtable. As with other vtable hooks, manually
+loading another plugin that wraps the same interface requires reverse load-order
+unloading; avoid hot-reloading plugins during a training run.
+
+The source is adapted from SAR's MIT-licensed InputSystem module. The 32-bit Linux build was tested live with SAR disabled on Triple Laser.
+Two unfocused repeats per setting produced 112 distinct frames with the hook off
+and 172 with it on over 360 steps. A settled-camera turn appeared after 3–5 steps
+without the hook and after one step with it. Environment stepping stayed near
+60 steps/s in both cases: the measured benefit was observation freshness, not a
+large step-throughput increase. Focus was checked during every trial. These are
+scene-specific measurements, not a general performance guarantee. Windows
+runtime and engine hot-unload/reload remain untested.
+
+## Experimental command delivery and Challenge Mode
+
+`PORTAL2_RL_DIRECT_INPUT=1` queues actions for server `PlayerRunCommand`;
+`PORTAL2_RL_DIRECT_INPUT=client` queues them in client `CreateMove` before
+prediction. Defaults retain the legacy console backend. Opt-in
+`PORTAL2_RL_INPUT_TRACE=/absolute/path.jsonl` records requested, created and
+consumed commands. Direct modes preserve held button bits and half-speed analog
+movement. A single action is queued once; observations can precede its consumption.
+The handshake reports `input_backend`; ticks report `input_consumed` and
+`input_pending`. These are experimental Linux/build-8928 checks, not a claim of
+complete actuator equivalence or Windows validation.
+
+`PORTAL2_RL_CHALLENGE_MODE=1` enables CM after `ApplyGameSettings` resets its
+cvar. Initial startup reloads once if necessary to create the native finish node.
+Ticks expose `challenge_enabled`, `challenge_nodes`, `challenge_finished` and
+`challenge_seconds`. A finish uses SAR's native StartTouch predicate: the local player touches a real,
+previously uncompleted node. A map transition remains a separate signal.
+The base Gym terminates on the native finish when CM was requested; ordinary
+episodes still use `map_finished`. Challenge HUD/leaderboard suppression matches the rendering
+config and prevents leaderboard popups from pausing a background experiment.
+
+When SAR is explicitly loaded, the bridge sets SAR's exported cheated-run guard
+and waits for confirmation before its handshake. This blocks `FinishRun` before
+it can submit a score. The render cfg also enforces `sv_cheats 1`. SAR stays
+off by default. Hot-unloading SAR during an experiment is unsupported.
